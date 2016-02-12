@@ -13,18 +13,10 @@ import (
 	"time"
 )
 
-type kmerhandler func(uint64) bool
-
 type sector struct {
 	start int
 	end   int
 }
-
-type kmerlist []uint64
-
-func (a kmerlist) Len() int           { return len(a) }
-func (a kmerlist) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a kmerlist) Less(i, j int) bool { return a[i] < a[j] }
 
 func swap(x *uint64, y *uint64) {
 	temp := *y
@@ -70,27 +62,30 @@ const maxmem = 512 * 1024 * 1024
 func parser(ch chan string, join *sync.WaitGroup, tocall kmerhandler, running *bool) {
 	defer join.Done()
 	for s := range ch {
-		var kmer uint64
+		var kmer kmer
+		kmer.init()
+		var pushed bool
 		for len, c := range s {
-			kmer = kmer >> 2
 			switch {
 			case c == 'A' || c == 'a':
+				pushed = true
 			case c == 'C' || c == 'c':
-				kmer |= 1 << 62
-			case c == 'G' || c == 'g':
-				kmer |= 2 << 62
+				kmer.push(1)
+				pushed = true
 			case c == 'T' || c == 't':
-				kmer |= 3 << 62
+				kmer.push(2)
+				pushed = true
+			case c == 'G' || c == 'g':
+				kmer.push(3)
+				pushed = true
+			default:
+				kmer.init()
+				pushed = false
 			}
-			if len > 31 {
-				len = 31
-			}
-			data := kmer | (uint64(01) << uint(62-(len)*2))
-			if data == 0 {
-				println("FAIL", kmer, len, s, (uint64(01) << uint(62-(len+1)*2)))
-			}
-			if !tocall(data) {
-				*running = false
+			if pushed {
+				if !tocall(kmer) {
+					*running = false
+				}
 			}
 		}
 	}
@@ -143,17 +138,19 @@ func scan(f *os.File, tocall kmerhandler, verbose bool) float64 {
 }
 
 func calcSectors(f *os.File) ([]sector, []int) {
-	sectors := make([]int, 1<<sectorexp)
+	kmers := make(kmerlist, 0, 16*1024*1024)
 	println("Calculating sectors")
 	checked := 0
-	scanned := scan(f, func(kmer uint64) bool {
+	scanned := scan(f, func(kmer kmer) bool {
 		checked++
 		if checked > 16*1024*1024 {
 			return false
 		}
-		sectors[kmer>>(64-sectorexp)]++
+		kmers = append(kmers, kmer)
 		return true
 	}, false)
+	sort.Sort(kmers)
+
 	for i := range sectors {
 		sectors[i] = int(float64(sectors[i]) / scanned * 1.1)
 	}
