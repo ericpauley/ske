@@ -3,52 +3,17 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"flag"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
+	"unsafe"
 )
-
-type sector struct {
-	start int
-	end   int
-}
-
-func swap(x *uint64, y *uint64) {
-	temp := *y
-	*y = *x
-	*x = temp
-}
-
-func partition(array []uint64, p uint, q uint, pivotLocation uint) uint {
-
-	pivot := array[pivotLocation]
-	swap(&array[pivotLocation], &array[q])
-	i := p
-	for j := p; j < q; j++ {
-		if array[j] <= pivot {
-			swap(&array[i], &array[j])
-			i++
-		}
-	}
-	swap(&array[q], &array[i])
-	return i
-}
-
-func quicksort(array []uint64, start uint, end uint) {
-	if start < end {
-		pivot := (end + start) / 2
-		r := partition(array, start, end, pivot)
-		if r > start {
-			quicksort(array, start, r-1)
-		}
-		quicksort(array, r+1, end)
-	}
-}
 
 func check(e error) {
 	if e != nil {
@@ -57,190 +22,103 @@ func check(e error) {
 }
 
 const sectorexp = 14
-const maxmem = 512 * 1024 * 1024
 
-func parser(ch chan string, join *sync.WaitGroup, tocall kmerhandler, running *bool) {
-	defer join.Done()
-	for s := range ch {
-		var kmer kmer
-		kmer.init()
-		var pushed bool
-		for len, c := range s {
-			switch {
-			case c == 'A' || c == 'a':
-				pushed = true
-			case c == 'C' || c == 'c':
-				kmer.push(1)
-				pushed = true
-			case c == 'T' || c == 't':
-				kmer.push(2)
-				pushed = true
-			case c == 'G' || c == 'g':
-				kmer.push(3)
-				pushed = true
-			default:
-				kmer.init()
-				pushed = false
-			}
-			if pushed {
-				if !tocall(kmer) {
-					*running = false
-				}
-			}
-		}
-	}
-}
+var maxmem uint = 2048 * 1024 * 1024
+var maxdisk uint = 10 * 1024 * 1024 * 1024
+var maxCores uint
+var minAbundance = 3
+var counts countList
 
-func scan(f *os.File, tocall kmerhandler, verbose bool) float64 {
-	f.Seek(0, 0)
-	start := time.Now()
-	fi, err := f.Stat()
-	check(err)
-	size := fi.Size()
-	scanner := bufio.NewScanner(bufio.NewReaderSize(f, 1024*1024))
-
-	running := true
-
-	c := make(chan string, 2000)
-	var pjoin sync.WaitGroup
-	pjoin.Add(10)
-	for i := 0; i < 10; i++ {
-		go parser(c, &pjoin, tocall, &running)
-	}
-	index := 0
-	current := ""
-
-	for scanner.Scan() {
-		if strings.HasPrefix(scanner.Text(), ">") {
-			index++
-			if index%1000000 == 0 {
-				pos, err := f.Seek(0, 1)
-				check(err)
-				if verbose {
-					fmt.Println(scanner.Text(), len(current), pos*100/size, time.Since(start), time.Since(start).Nanoseconds()/1000000*size/pos)
-				}
-			}
-			c <- current
-			current = ""
-		} else {
-			current += scanner.Text()
-		}
-		if !running {
-			break
-		}
-	}
-	close(c)
-	pjoin.Wait()
-	pos, err := f.Seek(0, 1)
-	check(err)
-	fmt.Println("Scan took ", time.Since(start))
-	return float64(pos) / float64(size)
-}
-
-func calcSectors(f *os.File) ([]sector, []int) {
-	kmers := make(kmerlist, 0, 16*1024*1024)
+func calcSectors(f *os.File) []sector {
+	kmers := make([]int, 0, 8*1024*1024)
 	println("Calculating sectors")
 	checked := 0
 	scanned := scan(f, func(kmer kmer) bool {
 		checked++
-		if checked > 16*1024*1024 {
+		if checked > 8*1024*1024 {
 			return false
 		}
-		kmers = append(kmers, kmer)
+		kmers = append(kmers, int(kmer.getPrefix()))
 		return true
 	}, false)
-	sort.Sort(kmers)
-
-	for i := range sectors {
-		sectors[i] = int(float64(sectors[i]) / scanned * 1.1)
-	}
-	size := 0
-	sum := 0
-	slices := 1
-	for i := range sectors {
-		if size+sectors[i] > maxmem/8 {
-			slices++
+	sort.Ints(kmers)
+	maxsize := uint(float64(maxmem/uint(unsafe.Sizeof(kmer{}))) * scanned)
+	var sectors []sector
+	var size uint
+	var lastKmer int
+	for _, kmer := range kmers {
+		size++
+		if size > maxsize {
+			if lastKmer != kmer {
+				s := sector{start: uint(lastKmer), end: uint(kmer)}
+				sectors = append(sectors, s)
+			}
+			lastKmer = kmer
 			size = 0
 		}
-		size += sectors[i]
-		sum += sectors[i]
 	}
-	lastIndex := 0
-	size = 0
-	dsectors := make([]sector, slices)
-	sectornum := 0
-	for i := range sectors {
-		if size+sectors[i] > maxmem/8 || size > sum/slices {
-			dsectors[sectornum] = sector{start: lastIndex, end: i}
-			println("Sector", sectornum, "from", lastIndex, "to", i, "size", size*8)
-			lastIndex = i
-			size = 0
-			sectornum++
-		}
-		size += sectors[i]
-	}
-	dsectors[sectornum] = sector{start: lastIndex, end: 1 << sectorexp}
-	println("Sector", sectornum, "from", lastIndex, "to", 1<<sectorexp, "size", size*8)
-	return dsectors, sectors
+	sectors = append(sectors, sector{start: uint(lastKmer), end: uint(maxKmer.getPrefix() + 1)})
+	return sectors
 }
 
-type kmercount struct {
-	kmer  uint64
-	count uint16
-}
-
-type outfile struct {
-	file    *os.File
-	stream  io.Writer
-	len     int
-	current uint64
-	count   uint16
-	channel chan kmercount
-}
-
-func saveChunks(oname string, counts []int, sorted chan []uint64, start time.Time) {
+func saveChunks(oname string, counts countList, sectors *[]sector, start time.Time, sorted chan chan kmerlist) {
 	var outfiles []*outfile
+	fmt.Println(counts)
 	for _, count := range counts {
-		name := oname + "." + strconv.Itoa(count)
+		println("Created count file ", count)
+		name := oname + "." + strconv.Itoa(int(count))
 		f, err := os.Create(name)
 		check(err)
-		ofile := outfile{file: f, stream: bufio.NewWriterSize(f, 1024*1024), len: count}
+		ofile := outfile{file: f, stream: f, len: count}
 		outfiles = append(outfiles, &ofile)
 		ofile.channel = make(chan kmercount, 10000)
+
 		go func() {
 			for kc := range ofile.channel {
-				binary.Write(ofile.stream, binary.LittleEndian, kc.kmer)
-				binary.Write(ofile.stream, binary.LittleEndian, kc.count)
+				fmt.Println("le", kc)
+				kc.kmer.write(ofile.stream)
+				b := make([]byte, 2)
+				binary.LittleEndian.PutUint16(b, kc.count)
+				ofile.stream.Write(b)
 			}
 		}()
 	}
 	i := 0
-	for c := range sorted {
-		if i%100 == 0 {
-			println("Outputting chunk", i, i*100/(1<<sectorexp), time.Since(start).Seconds()*float64(1<<sectorexp)/float64(i))
-		}
+	for towrite := range sorted {
+		runtime.GC()
+		println("Awaiting sector ", i)
+		kmers := <-towrite
+		println("Sector arrived ", len(kmers))
 		i++
-		for _, kmer := range c {
-			len := 31
-			var count uint16 = 1
-			for kmer&3 == 0 {
-				kmer >>= 2
-				len--
+		for j, kmer := range kmers {
+			if j%1000000 == 0 {
+				println("Outputting kmer ", j)
 			}
-			kmer >>= 2
+			var count uint16 = 1
+			len := kmer.autoRsh()
 			for _, outfile := range outfiles {
 				if len > outfile.len {
-					kmer >>= uint(2 * (len - outfile.len))
+					kmer.rsh(uint(2 * (len - outfile.len)))
 					len = outfile.len
 				}
 				if len == outfile.len {
-					if kmer == outfile.current || outfile.count == 0 {
-						outfile.count++
+					fmt.Println("Checking", kmer)
+					if outfile.count == 0 {
+						println("New")
+						outfile.current = kmer
+					}
+					if kmer == outfile.current {
+						println("Repeat")
+						outfile.count += count
 						break
 					} else {
+						println("Overwrite")
 						outfile.current, kmer = kmer, outfile.current
 						outfile.count, count = count, outfile.count
-						outfile.channel <- kmercount{kmer: kmer, count: count}
+						if int(count) >= minAbundance {
+							v := kmercount{kmer: kmer, count: count}
+							outfile.channel <- v
+						}
 					}
 				}
 			}
@@ -248,46 +126,138 @@ func saveChunks(oname string, counts []int, sorted chan []uint64, start time.Tim
 	}
 }
 
-func processChunks(c chan []uint64, sorted chan []uint64) {
-	i := 0
-	for sector := range c {
-		i++
-		sort.Sort(kmerlist(sector))
-		sorted <- sector
+func writeChunk(s *sector, pjoin *sync.WaitGroup) {
+	t, err := ioutil.TempFile("", "kmer")
+	check(err)
+	s.tmpfile = t
+	bufd := bufio.NewWriterSize(t, 4*1024*1024)
+	check(err)
+	for kmer := range s.c {
+		s.len++
+		kmer.write(bufd)
+	}
+	bufd.Flush()
+	pjoin.Done()
+}
+
+func processChunks(c chan kmerlist, sorted chan chan kmerlist) {
+	for kmers := range c {
+		output := make(chan kmerlist)
+		sorted <- output
+		sort.Sort(kmers)
+		output <- kmers
+	}
+}
+
+func revcmp() {
+	f, err := os.Open("ecoli.count.31")
+	reader := bufio.NewReaderSize(f, 4*1024*1024)
+	check(err)
+	b := make([]byte, 2)
+	var counts kmercountlist
+	for true {
+		k := readKmer(reader).minimize(31)
+		l, err := reader.Read(b)
+		if err != nil {
+			break
+		}
+		if l < 2 {
+			break
+		}
+		count := binary.LittleEndian.Uint16(b)
+		counts = append(counts, kmercount{k, count})
+	}
+	sort.Sort(counts)
+	for _, count := range counts {
+		fmt.Println(count.kmer, count.count)
 	}
 }
 
 func main() {
+	revcmp()
+	return
+	var foutput string
+	flag.StringVar(&foutput, "out", "", "The output filename")
+	flag.Var(&counts, "counts", "A comma separated list of kmer lengths to calculate")
+	flag.UintVar(&maxmem, "maxmem", 2048, "Amount of memory allowed (MB)")
+	flag.UintVar(&maxdisk, "maxdisk", 10, "Amount of disk usage allowed (GB)")
+	flag.UintVar(&maxCores, "cores", uint(runtime.NumCPU()), "Number of CPU cores to use")
+	flag.IntVar(&minAbundance, "min-abundance", 3, "Min number of occurences to be solid")
+	flag.Parse()
+	maxmem = maxmem * 1024 * 1024 / (maxCores + 2)
+	maxdisk = maxdisk * 1024 * 1024 * 1024
+	var finput = flag.Arg(0)
+	if finput == "" {
+		fmt.Println("Error: Must define an input file!")
+		return
+	}
 	start := time.Now()
-	fname := "ecoli.fasta"
 	oname := "ecoli.count"
-	counts := []int{31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
-	f, err := os.Open(fname)
+	f, err := os.Open(finput)
 	check(err)
-	sectors, sizes := calcSectors(f)
+	sectors := calcSectors(f)
 	fmt.Printf("Created %d sectors\n", len(sectors))
-	c := make(chan []uint64, 1000)
-	sorted := make(chan []uint64, 1000)
-	go processChunks(c, sorted)
-	go saveChunks(oname, counts, sorted, start)
-	for i, sector := range sectors {
-		fmt.Printf("Creating sector #%d\n", i)
-		chunks := make([][]uint64, sector.end-sector.start)
-		for i := range chunks {
-			chunks[i] = make([]uint64, 0, sizes[i+sector.start])
+	// toSort := make(chan sector)
+	maxDiskSectors := maxdisk / maxmem
+	if maxDiskSectors > 20 {
+		maxDiskSectors = 20
+	}
+	passes := uint(len(sectors)-1)/maxDiskSectors + 1
+	toSort := make(chan kmerlist)
+	sorted := make(chan chan kmerlist, 100)
+	for i := 0; uint(i) < maxCores; i++ {
+		go processChunks(toSort, sorted)
+	}
+	go saveChunks(oname, counts, &sectors, start, sorted)
+	for pass := uint(0); pass < passes; pass++ {
+		fmt.Print("\rPerforming sectoring pass ", pass+1, " of ", passes)
+		min := pass * maxDiskSectors
+		max := (pass + 1) * maxDiskSectors
+		if max > uint(len(sectors)) {
+			max = uint(len(sectors))
 		}
-		scan(f, func(kmer uint64) bool {
-			cnum := int(kmer >> (64 - sectorexp))
-			if sector.start <= cnum && cnum < sector.end {
-				chunks[cnum-sector.start] = append(chunks[cnum-sector.start], kmer)
+		toProcess := sectors[min:max]
+		var pjoin sync.WaitGroup
+		pjoin.Add(len(toProcess))
+		var sectorMap [1 << 12]sector
+		for i := range toProcess {
+			toProcess[i].c = make(chan kmer, 100)
+			go writeChunk(&toProcess[i], &pjoin)
+			for j := toProcess[i].start; j < toProcess[i].end; j++ {
+				sectorMap[j] = toProcess[i]
+			}
+		}
+		lowest := maxKmer
+		scan(f, func(kmer kmer) bool {
+			if kmer.cmp(lowest) == -1 {
+				lowest = kmer
+				fmt.Println(lowest)
+			}
+			if sectorMap[kmer.getPrefix()].c != nil {
+				sectorMap[kmer.getPrefix()].c <- kmer
 			}
 			return true
 		}, true)
-		for i, chunk := range chunks {
-			if len(chunk) > sizes[i+sector.start] {
-				println("chunk went over", i+sector.start)
+		for _, s := range toProcess {
+			close(s.c)
+		}
+		pjoin.Wait()
+		for i := range toProcess {
+			println("Reading sector")
+			data := make(kmerlist, sectors[i].len)
+			sectors[i].tmpfile.Seek(0, 0)
+			reader := bufio.NewReaderSize(sectors[i].tmpfile, 4096*1024*1024)
+			for j := 0; j < sectors[i].len; j++ {
+				data[j] = readKmer(reader)
 			}
-			c <- chunk
+			sectors[i].tmpfile.Close()
+			err = os.Remove(sectors[i].tmpfile.Name())
+			check(err)
+			toSort <- data
 		}
 	}
+	scan(f, func(kmer kmer) bool {
+		return true
+	}, true)
+	fmt.Println("Counting took", time.Now().Sub(start), oname)
 }
