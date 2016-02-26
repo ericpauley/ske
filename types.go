@@ -192,7 +192,7 @@ type sector struct {
 
 type kmercount struct {
 	kmer  kmer
-	count uint16
+	count uint32
 }
 
 type kmercountlist []kmercount
@@ -206,7 +206,7 @@ type outfile struct {
 	stream  io.Writer
 	len     uint
 	current kmer
-	count   uint16
+	count   uint32
 	channel chan kmercount
 }
 

@@ -61,10 +61,11 @@ func calcSectors(f *os.File) []sector {
 	return sectors
 }
 
-func saveChunks(oname string, counts countList, sectors *[]sector, start time.Time, sorted chan chan kmerlist) {
+func saveChunks(oname string, counts countList, sectors *[]sector, start time.Time, sorted chan chan kmerlist, sjoin *sync.WaitGroup) {
 	var outfiles []*outfile
-	fmt.Println(counts)
+	var writerJoin sync.WaitGroup
 	for _, count := range counts {
+		writerJoin.Add(1)
 		println("Created count file ", count)
 		name := oname + "." + strconv.Itoa(int(count))
 		f, err := os.Create(name)
@@ -76,25 +77,34 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 		go func() {
 			for kc := range ofile.channel {
 				fmt.Println("le", kc)
-				kc.kmer.write(ofile.stream)
+				fmt.Fprintln(ofile.stream, kc)
+				/*kc.kmer.write(ofile.stream)
 				b := make([]byte, 2)
 				binary.LittleEndian.PutUint16(b, kc.count)
-				ofile.stream.Write(b)
+				ofile.stream.Write(b)*/
 			}
+			writerJoin.Done()
 		}()
 	}
 	i := 0
+	println("Ready to save sectors")
 	for towrite := range sorted {
-		runtime.GC()
-		println("Awaiting sector ", i)
-		kmers := <-towrite
-		println("Sector arrived ", len(kmers))
-		i++
-		for j, kmer := range kmers {
-			if j%1000000 == 0 {
-				println("Outputting kmer ", j)
+		var dcount uint32 = 1
+		var kmers kmerlist
+		if towrite != nil {
+			println("Awaiting sector ", i)
+			kmers = <-towrite
+			println("Sector arrived ", len(kmers))
+			i++
+		} else {
+			dcount = 0
+			for i := 0; i < len(counts); i++ {
+				kmers = append(kmers, maxKmer)
 			}
-			var count uint16 = 1
+			println("Recieved nil sector")
+		}
+		for j, kmer := range kmers {
+			count := dcount
 			len := kmer.autoRsh()
 			for _, outfile := range outfiles {
 				if len > outfile.len {
@@ -102,19 +112,17 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 					len = outfile.len
 				}
 				if len == outfile.len {
-					fmt.Println("Checking", kmer)
 					if outfile.count == 0 {
-						println("New")
 						outfile.current = kmer
 					}
-					if kmer == outfile.current {
-						println("Repeat")
+					if kmer == outfile.current && count != 0 {
 						outfile.count += count
 						break
 					} else {
-						println("Overwrite")
+						fmt.Println("Overwrite", j, kmer)
 						outfile.current, kmer = kmer, outfile.current
 						outfile.count, count = count, outfile.count
+						println(count)
 						if int(count) >= minAbundance {
 							v := kmercount{kmer: kmer, count: count}
 							outfile.channel <- v
@@ -124,6 +132,11 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 			}
 		}
 	}
+	for _, ofile := range outfiles {
+		close(ofile.channel)
+	}
+	writerJoin.Wait()
+	sjoin.Done()
 }
 
 func writeChunk(s *sector, pjoin *sync.WaitGroup) {
@@ -140,13 +153,16 @@ func writeChunk(s *sector, pjoin *sync.WaitGroup) {
 	pjoin.Done()
 }
 
-func processChunks(c chan kmerlist, sorted chan chan kmerlist) {
+func processChunks(c chan kmerlist, sorted chan chan kmerlist, ojoin *sync.WaitGroup) {
+	println("Process started")
 	for kmers := range c {
+		println("Sorting chunk!")
 		output := make(chan kmerlist)
 		sorted <- output
 		sort.Sort(kmers)
 		output <- kmers
 	}
+	ojoin.Done()
 }
 
 func revcmp() {
@@ -164,7 +180,7 @@ func revcmp() {
 		if l < 2 {
 			break
 		}
-		count := binary.LittleEndian.Uint16(b)
+		count := binary.LittleEndian.Uint32(b)
 		counts = append(counts, kmercount{k, count})
 	}
 	sort.Sort(counts)
@@ -174,8 +190,6 @@ func revcmp() {
 }
 
 func main() {
-	revcmp()
-	return
 	var foutput string
 	flag.StringVar(&foutput, "out", "", "The output filename")
 	flag.Var(&counts, "counts", "A comma separated list of kmer lengths to calculate")
@@ -205,10 +219,14 @@ func main() {
 	passes := uint(len(sectors)-1)/maxDiskSectors + 1
 	toSort := make(chan kmerlist)
 	sorted := make(chan chan kmerlist, 100)
+	var ojoin sync.WaitGroup
+	var sjoin sync.WaitGroup
 	for i := 0; uint(i) < maxCores; i++ {
-		go processChunks(toSort, sorted)
+		ojoin.Add(1)
+		go processChunks(toSort, sorted, &ojoin)
 	}
-	go saveChunks(oname, counts, &sectors, start, sorted)
+	sjoin.Add(1)
+	go saveChunks(oname, counts, &sectors, start, sorted, &sjoin)
 	for pass := uint(0); pass < passes; pass++ {
 		fmt.Print("\rPerforming sectoring pass ", pass+1, " of ", passes)
 		min := pass * maxDiskSectors
@@ -231,7 +249,6 @@ func main() {
 		scan(f, func(kmer kmer) bool {
 			if kmer.cmp(lowest) == -1 {
 				lowest = kmer
-				fmt.Println(lowest)
 			}
 			if sectorMap[kmer.getPrefix()].c != nil {
 				sectorMap[kmer.getPrefix()].c <- kmer
@@ -256,8 +273,12 @@ func main() {
 			toSort <- data
 		}
 	}
-	scan(f, func(kmer kmer) bool {
-		return true
-	}, true)
+	close(toSort)
+	println("Waiting sort completion")
+	ojoin.Wait()
+	sorted <- nil
+	println("waiting save completion")
+	close(sorted)
+	sjoin.Wait()
 	fmt.Println("Counting took", time.Now().Sub(start), oname)
 }

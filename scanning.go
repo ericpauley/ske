@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"sync"
@@ -15,10 +16,8 @@ func parser(ch chan []byte, join *sync.WaitGroup, tocall kmerhandler, running *b
 		kmer.init()
 		var pushed bool
 		for _, c := range s {
-			kmer.push(uint64(c >> 1 & 3))
-			if kmer[0] == 3 {
-				fmt.Println(s)
-			}
+			bp := uint64(c >> 1 & 3)
+			kmer.push(bp)
 			pushed = true
 			if pushed {
 				if !tocall(kmer) {
@@ -35,8 +34,7 @@ func scan(f *os.File, tocall kmerhandler, verbose bool) float64 {
 	fi, err := f.Stat()
 	check(err)
 	size := fi.Size()
-	scanner := bufio.NewScanner(bufio.NewReaderSize(f, 1024*1024))
-
+	scanner := bufio.NewScanner(bufio.NewReader(f))
 	running := true
 
 	c := make(chan []byte)
@@ -47,10 +45,11 @@ func scan(f *os.File, tocall kmerhandler, verbose bool) float64 {
 	}
 	index := 0
 	var current []byte
-
+	line := 0
 	for scanner.Scan() {
+		line++
 		b := scanner.Bytes()
-		if b[0] == '>' {
+		if bytes.IndexByte(b, '>') != -1 {
 			index++
 			if index%10000 == 0 {
 				pos, err := f.Seek(0, 1)
@@ -62,16 +61,13 @@ func scan(f *os.File, tocall kmerhandler, verbose bool) float64 {
 			c <- current
 			current = make([]byte, 0)
 		} else {
-			if len(current) == 0 {
-				current = b
-			} else {
-				current = append(current, b...)
-			}
+			current = append(current, b...)
 		}
 		if !running {
 			break
 		}
 	}
+	c <- current
 	close(c)
 	pjoin.Wait()
 	pos, err := f.Seek(0, 1)
