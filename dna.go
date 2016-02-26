@@ -76,7 +76,6 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 
 		go func() {
 			for kc := range ofile.channel {
-				fmt.Println("le", kc)
 				fmt.Fprintln(ofile.stream, kc)
 				/*kc.kmer.write(ofile.stream)
 				b := make([]byte, 2)
@@ -103,7 +102,7 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 			}
 			println("Recieved nil sector")
 		}
-		for j, kmer := range kmers {
+		for _, kmer := range kmers {
 			count := dcount
 			len := kmer.autoRsh()
 			for _, outfile := range outfiles {
@@ -119,10 +118,8 @@ func saveChunks(oname string, counts countList, sectors *[]sector, start time.Ti
 						outfile.count += count
 						break
 					} else {
-						fmt.Println("Overwrite", j, kmer)
 						outfile.current, kmer = kmer, outfile.current
 						outfile.count, count = count, outfile.count
-						println(count)
 						if int(count) >= minAbundance {
 							v := kmercount{kmer: kmer, count: count}
 							outfile.channel <- v
@@ -213,8 +210,8 @@ func main() {
 	fmt.Printf("Created %d sectors\n", len(sectors))
 	// toSort := make(chan sector)
 	maxDiskSectors := maxdisk / maxmem
-	if maxDiskSectors > 20 {
-		maxDiskSectors = 20
+	if maxDiskSectors > 30 {
+		maxDiskSectors = 30
 	}
 	passes := uint(len(sectors)-1)/maxDiskSectors + 1
 	toSort := make(chan kmerlist)

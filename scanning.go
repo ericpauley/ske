@@ -15,8 +15,8 @@ func parser(ch chan []byte, join *sync.WaitGroup, tocall kmerhandler, running *b
 		var kmer kmer
 		kmer.init()
 		var pushed bool
-		for _, c := range s {
-			bp := uint64(c >> 1 & 3)
+		for i := len(s) - 1; i >= 0; i-- {
+			bp := uint64(s[i] >> 1 & 3)
 			kmer.push(bp)
 			pushed = true
 			if pushed {
