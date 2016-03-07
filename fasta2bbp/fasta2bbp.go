@@ -64,4 +64,5 @@ func main() {
 			}
 		}
 	}
+	output.Flush()
 }

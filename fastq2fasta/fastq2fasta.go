@@ -23,4 +23,5 @@ func main() {
 			output.WriteRune('\n')
 		}
 	}
+	output.Flush()
 }
