@@ -7,30 +7,39 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/ericpauley/dna"
 )
 
-func parser(ch chan []byte, join *sync.WaitGroup, tocall kmerhandler, running *bool, min int, max int) {
+func parser(ch chan []byte, join *sync.WaitGroup, tocall dna.Kmerhandler, running *bool, min int, max int) {
 	defer join.Done()
 	for s := range ch {
-		var kmer kmer
-		kmer.init()
+		var kmer dna.Kmer
 		var pushed int
 		for i := len(s) - 1; i >= 0; i-- {
-			bp := uint64(s[i] >> 1 & 3)
-			kmer.push(bp)
-			pushed++
-			if min <= pushed {
-				if pushed >= max {
-					break
-				} else if !tocall(kmer) {
-					*running = false
+			if s[i]>>3&1 == 0 {
+				bp := uint64(s[i] >> 1 & 3)
+				kmer.Push(bp)
+				pushed++
+				if pushed == max {
+					if !tocall(kmer) {
+						*running = false
+					}
 				}
+			} else {
+				pushed = 0
+				kmer = dna.Kmer{}
+			}
+		}
+		if pushed < max && pushed >= min {
+			if !tocall(kmer) {
+				*running = false
 			}
 		}
 	}
 }
 
-func scan(f *os.File, tocall kmerhandler, min int, max int, verbose bool) float64 {
+func scan(f *os.File, tocall dna.Kmerhandler, min int, max int, verbose bool) float64 {
 	f.Seek(0, 0)
 	start := time.Now()
 	fi, err := f.Stat()

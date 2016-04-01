@@ -9,7 +9,6 @@ import (
 	"os"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -28,6 +27,8 @@ var maxdisk uint = 10 * 1024 * 1024 * 1024
 var maxCores uint
 var minAbundance = 3
 var counts countList
+var minsize = 8
+var maxsize = 30
 
 func calcSectors(f *os.File) []sector {
 	kmers := make([]int, 0, 8*1024*1024)
@@ -40,7 +41,7 @@ func calcSectors(f *os.File) []sector {
 		}
 		kmers = append(kmers, int(kmer.getPrefix()))
 		return true
-	}, false)
+	}, minsize, maxsize, false)
 	sort.Ints(kmers)
 	maxsize := uint(float64(maxmem/uint(unsafe.Sizeof(kmer{}))) * scanned)
 	var sectors []sector
@@ -62,76 +63,36 @@ func calcSectors(f *os.File) []sector {
 }
 
 func saveChunks(oname string, counts countList, sectors *[]sector, start time.Time, sorted chan chan kmerlist, sjoin *sync.WaitGroup) {
-	var outfiles []*outfile
+	outfile, err := os.Create(oname)
+	check(err)
+	writechan := make(chan kmercount, 100)
 	var writerJoin sync.WaitGroup
-	for _, count := range counts {
-		writerJoin.Add(1)
-		println("Created count file ", count)
-		name := oname + "." + strconv.Itoa(int(count))
-		f, err := os.Create(name)
-		check(err)
-		ofile := outfile{file: f, stream: f, len: count}
-		outfiles = append(outfiles, &ofile)
-		ofile.channel = make(chan kmercount, 10000)
-
-		go func() {
-			for kc := range ofile.channel {
-				fmt.Fprintln(ofile.stream, kc)
-				/*kc.kmer.write(ofile.stream)
-				b := make([]byte, 2)
-				binary.LittleEndian.PutUint16(b, kc.count)
-				ofile.stream.Write(b)*/
-			}
-			writerJoin.Done()
-		}()
-	}
-	i := 0
+	writerJoin.Add(1)
+	go func() {
+		for kc := range writechan {
+			kc.kmer.write(outfile)
+			b := make([]byte, 4)
+			binary.LittleEndian.PutUint32(b, kc.count)
+			outfile.Write(b)
+		}
+		writerJoin.Done()
+	}()
 	println("Ready to save sectors")
 	for towrite := range sorted {
-		var dcount uint32 = 1
-		var kmers kmerlist
-		if towrite != nil {
-			println("Awaiting sector ", i)
-			kmers = <-towrite
-			println("Sector arrived ", len(kmers))
-			i++
-		} else {
-			dcount = 0
-			for i := 0; i < len(counts); i++ {
-				kmers = append(kmers, maxKmer)
-			}
-			println("Recieved nil sector")
-		}
+		kmers := <-towrite
+		println("Received sector", len(kmers))
+		var current kmercount
 		for _, kmer := range kmers {
-			count := dcount
-			len := kmer.autoRsh()
-			for _, outfile := range outfiles {
-				if len > outfile.len {
-					kmer.rsh(uint(2 * (len - outfile.len)))
-					len = outfile.len
-				}
-				if len == outfile.len {
-					if outfile.count == 0 {
-						outfile.current = kmer
-					}
-					if kmer == outfile.current && count != 0 {
-						outfile.count += count
-						break
-					} else {
-						outfile.current, kmer = kmer, outfile.current
-						outfile.count, count = count, outfile.count
-						if int(count) >= minAbundance {
-							v := kmercount{kmer: kmer, count: count}
-							outfile.channel <- v
-						}
-					}
-				}
+			if current.kmer == kmer {
+				current.count++
+			} else {
+				writechan <- current
+				current.kmer = kmer
+				current.count = 1
 			}
 		}
 	}
-	for _, ofile := range outfiles {
-		close(ofile.channel)
-	}
+	close(writechan)
 	writerJoin.Wait()
 	sjoin.Done()
 }
@@ -203,7 +164,9 @@ func main() {
 		return
 	}
 	start := time.Now()
-	oname := "ecoli.count"
+	if foutput == "" {
+		foutput = finput + ".pcount"
+	}
 	f, err := os.Open(finput)
 	check(err)
 	sectors := calcSectors(f)
@@ -223,7 +186,7 @@ func main() {
 		go processChunks(toSort, sorted, &ojoin)
 	}
 	sjoin.Add(1)
-	go saveChunks(oname, counts, &sectors, start, sorted, &sjoin)
+	go saveChunks(foutput, counts, &sectors, start, sorted, &sjoin)
 	for pass := uint(0); pass < passes; pass++ {
 		fmt.Print("\rPerforming sectoring pass ", pass+1, " of ", passes)
 		min := pass * maxDiskSectors
@@ -251,7 +214,7 @@ func main() {
 				sectorMap[kmer.getPrefix()].c <- kmer
 			}
 			return true
-		}, true)
+		}, minsize, maxsize, true)
 		for _, s := range toProcess {
 			close(s.c)
 		}
@@ -277,5 +240,5 @@ func main() {
 	println("waiting save completion")
 	close(sorted)
 	sjoin.Wait()
-	fmt.Println("Counting took", time.Now().Sub(start), oname)
+	fmt.Println("Counting took", time.Now().Sub(start), foutput)
 }

@@ -201,18 +201,26 @@ func (a kmercountlist) Len() int           { return len(a) }
 func (a kmercountlist) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a kmercountlist) Less(i, j int) bool { return a[i].kmer.cmp(a[j].kmer) == -1 }
 
-type outfile struct {
+/*type outfile struct {
 	file    *os.File
 	stream  io.Writer
 	len     uint
 	current kmer
 	count   uint32
 	channel chan kmercount
-}
+}*/
 
 type empty struct{}
 
 type semaphore chan empty
+
+const pcountmagic = 14144233525 // Whatever
+
+type pcount struct {
+	magic int
+	min   int
+	max   int
+}
 
 func (semaphore semaphore) acquire() {
 	semaphore <- empty{}
