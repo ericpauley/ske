@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strconv"
+	"time"
 
 	"github.com/ericpauley/dna"
 	"github.com/ericpauley/go-hdf5"
@@ -234,6 +235,7 @@ func main() {
 	close(writes)
 	streamWait <- true
 	<-streamWait
+	time.Sleep(time.Second)
 	for i := maxsize; i >= minsize; i-- {
 		outputs[i].table.Close()
 		outputs[i].file.Flush(hdf5.F_SCOPE_GLOBAL)
