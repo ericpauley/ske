@@ -212,6 +212,7 @@ func main() {
 		outputs[i].file = h5
 		outputs[i].buffer = make([]minimerCount, 0, readLimit)
 	}
+	println("Streaming kmers")
 	go streamKmers(reads, writes, streamWait)
 	i := 0
 	for _, kmersource := range kmersources {
