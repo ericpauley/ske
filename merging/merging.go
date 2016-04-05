@@ -194,6 +194,7 @@ func main() {
 			name, err := group.ObjectNameByIndex(i)
 			check(err)
 			dset, _ := group.OpenTable(name)
+			defer dset.Close()
 			records, _ := dset.NumPackets()
 			kmersources = append(kmersources, kmerReader(dset, reads, size, records))
 		}
