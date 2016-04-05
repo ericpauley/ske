@@ -31,9 +31,6 @@ func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) c
 			if j+toFetch > records {
 				toFetch = records - j
 			}
-			if toFetch == 0 {
-				break
-			}
 			req := tableRead{table, toFetch, make(chan []dna.Kmer)}
 			reqs <- req
 			result := <-req.future
@@ -130,7 +127,9 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 		select {
 		case read := <-reads:
 			result := make([]dna.Kmer, read.num)
-			read.table.Next(&result)
+			if len(result) > 0 {
+				read.table.Next(&result)
+			}
 			read.future <- result
 		case write := <-writes:
 			select {
