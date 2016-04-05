@@ -137,6 +137,7 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 	for {
 		select {
 		case read := <-reads:
+			println("read")
 			lock.Lock()
 			result := make([]dna.Kmer, read.num, readLimit)
 			if len(result) > 0 {
@@ -145,6 +146,7 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 			read.future <- result
 			lock.Unlock()
 		case write := <-writes:
+			println("write")
 			lock.Lock()
 			select {
 			case write.future <- write.table.Append(&write.data):
@@ -152,6 +154,7 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 			}
 			lock.Unlock()
 		case v := <-done:
+			println("done")
 			done <- v
 			return
 		}
@@ -251,6 +254,7 @@ func main() {
 			}
 		}
 	}
+	println("Pls no more reads")
 	for i := maxsize; i >= minsize; i-- {
 		if len(outputs[i].buffer) > 0 {
 			writes <- tableWrite{outputs[i].table, outputs[i].buffer, make(chan error)}
