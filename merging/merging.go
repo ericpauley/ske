@@ -177,7 +177,6 @@ func main() {
 	reads := make(chan tableRead)
 	writes := make(chan tableWrite, 2)
 	streamWait := make(chan bool)
-	go streamKmers(reads, writes, streamWait)
 	for _, name := range names {
 		h5, err := hdf5.OpenFile(name, hdf5.F_ACC_RDONLY)
 		check(err)
@@ -212,6 +211,7 @@ func main() {
 		outputs[i].file = h5
 		outputs[i].buffer = make([]minimerCount, 0, readLimit)
 	}
+	go streamKmers(reads, writes, streamWait)
 	i := 0
 	for _, kmersource := range kmersources {
 		for countlist := range kmersource {
