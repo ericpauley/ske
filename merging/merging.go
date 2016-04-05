@@ -121,7 +121,7 @@ type tableWrite struct {
 	future chan error
 }
 
-func streamKmers(reads chan tableRead, writes chan tableWrite) {
+func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 	for {
 		select {
 		case read := <-reads:
@@ -133,7 +133,9 @@ func streamKmers(reads chan tableRead, writes chan tableWrite) {
 			case write.future <- write.table.Append(&write.data):
 			default:
 			}
-
+		case <-done:
+			done <- true
+			return
 		}
 
 	}
@@ -164,7 +166,8 @@ func main() {
 	var kmersources []chan []dna.Kmer
 	reads := make(chan tableRead)
 	writes := make(chan tableWrite, 2)
-	go streamKmers(reads, writes)
+	streamWait := make(chan bool)
+	go streamKmers(reads, writes, streamWait)
 	for _, name := range names {
 		h5, err := hdf5.OpenFile(name, hdf5.F_ACC_RDONLY)
 		check(err)
@@ -227,6 +230,10 @@ func main() {
 			}
 		}
 	}
+	close(reads)
+	close(writes)
+	streamWait <- true
+	<-streamWait
 	for i := maxsize; i >= minsize; i-- {
 		outputs[i].table.Close()
 		outputs[i].file.Flush(hdf5.F_SCOPE_GLOBAL)
