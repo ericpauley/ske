@@ -135,22 +135,23 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 	for {
 		select {
 		case read := <-reads:
+			println("Read")
 			result := make([]dna.Kmer, read.num, readLimit)
 			if len(result) > 0 {
 				read.table.Next(&result)
 			}
 			read.future <- result
 		case write := <-writes:
+			println("Write")
 			select {
 			case write.future <- write.table.Append(&write.data):
 			default:
 			}
-		case <-done:
+		case v := <-done:
 			println("finished??")
-			done <- true
+			done <- v
 			return
 		}
-
 	}
 }
 
@@ -248,8 +249,6 @@ func main() {
 			writes <- tableWrite{outputs[i].table, outputs[i].buffer, make(chan error)}
 		}
 	}
-	close(reads)
-	close(writes)
 	println("Got to waiting part!")
 	streamWait <- true
 	<-streamWait
@@ -259,6 +258,5 @@ func main() {
 		outputs[i].file.Flush(hdf5.F_SCOPE_GLOBAL)
 		outputs[i].file.Close()
 	}
-
 	println(i)
 }
