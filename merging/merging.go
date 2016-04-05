@@ -242,8 +242,14 @@ func main() {
 			}
 		}
 	}
+	for i := maxsize; i >= minsize; i-- {
+		if len(outputs[i].buffer) > 0 {
+			writes <- tableWrite{outputs[i].table, outputs[i].buffer, make(chan error)}
+		}
+	}
 	close(reads)
 	close(writes)
+	println("Got to waiting part!")
 	streamWait <- true
 	<-streamWait
 	time.Sleep(time.Second)
