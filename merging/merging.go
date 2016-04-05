@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strconv"
-	"time"
 
 	"github.com/ericpauley/dna"
 	"github.com/ericpauley/go-hdf5"
@@ -135,20 +134,17 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 	for {
 		select {
 		case read := <-reads:
-			println("Read")
 			result := make([]dna.Kmer, read.num, readLimit)
 			if len(result) > 0 {
 				read.table.Next(&result)
 			}
 			read.future <- result
 		case write := <-writes:
-			println("Write")
 			select {
 			case write.future <- write.table.Append(&write.data):
 			default:
 			}
 		case v := <-done:
-			println("finished??")
 			done <- v
 			return
 		}
@@ -252,7 +248,6 @@ func main() {
 	println("Got to waiting part!")
 	streamWait <- true
 	<-streamWait
-	time.Sleep(time.Second)
 	for i := maxsize; i >= minsize; i-- {
 		outputs[i].table.Close()
 		outputs[i].file.Flush(hdf5.F_SCOPE_GLOBAL)
