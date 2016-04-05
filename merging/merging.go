@@ -23,7 +23,7 @@ func check(e error) {
 	}
 }
 
-var lock sync.Locker
+var lock sync.Mutex
 
 func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) chan []dna.Kmer {
 	c := make(chan []dna.Kmer, 10)
