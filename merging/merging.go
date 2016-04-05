@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"strconv"
+	"sync"
 
 	"github.com/ericpauley/dna"
 	"github.com/ericpauley/go-hdf5"
@@ -21,6 +22,8 @@ func check(e error) {
 		panic(e)
 	}
 }
+
+var lock sync.Locker
 
 func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) chan []dna.Kmer {
 	c := make(chan []dna.Kmer, 10)
@@ -134,16 +137,20 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 	for {
 		select {
 		case read := <-reads:
+			lock.Lock()
 			result := make([]dna.Kmer, read.num, readLimit)
 			if len(result) > 0 {
 				read.table.Next(&result)
 			}
 			read.future <- result
+			lock.Unlock()
 		case write := <-writes:
+			lock.Lock()
 			select {
 			case write.future <- write.table.Append(&write.data):
 			default:
 			}
+			lock.Unlock()
 		case v := <-done:
 			done <- v
 			return
@@ -173,6 +180,7 @@ func main() {
 		fmt.Println("Error: Must define an input file!")
 		return
 	}
+	lock.Lock()
 	var kmersources []chan []dna.Kmer
 	reads := make(chan tableRead)
 	writes := make(chan tableWrite, 2)
@@ -212,6 +220,7 @@ func main() {
 		outputs[i].file = h5
 		outputs[i].buffer = make([]minimerCount, 0, readLimit)
 	}
+	lock.Unlock()
 	println("Streaming kmers")
 	go streamKmers(reads, writes, streamWait)
 	i := 0
@@ -250,10 +259,12 @@ func main() {
 	println("Got to waiting part!")
 	streamWait <- true
 	<-streamWait
+	lock.Lock()
 	for i := maxsize; i >= minsize; i-- {
 		outputs[i].table.Close()
 		outputs[i].file.Flush(hdf5.F_SCOPE_GLOBAL)
 		outputs[i].file.Close()
 	}
+	lock.Unlock()
 	println(i)
 }
