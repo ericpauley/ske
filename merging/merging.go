@@ -146,6 +146,7 @@ func streamKmers(reads chan tableRead, writes chan tableWrite, done chan bool) {
 			default:
 			}
 		case <-done:
+			println("finished??")
 			done <- true
 			return
 		}
