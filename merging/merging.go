@@ -32,11 +32,14 @@ func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) c
 				toFetch = records - j
 			}
 			if toFetch == 0 {
-				return
+				break
 			}
 			req := tableRead{table, toFetch, make(chan []dna.Kmer)}
 			reqs <- req
 			result := <-req.future
+			if len(result) == 0 {
+				break
+			}
 			if len(result) > 0 && result[0].Length == 0 {
 				for i := range result {
 					result[i].Normalize(uint32(size))
