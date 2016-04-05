@@ -41,12 +41,12 @@ func kmerReader(table *hdf5.Table, reqs chan tableRead, size int) chan []dna.Kme
 			}
 			tosend := result[:0]
 			for i := range result {
-				if len(result[i]) >= minsize{
+				if result[i].Length >= uint32(minsize) {
 					result[i].Truncate(uint32(maxsize))
-					tosend := append(tosend, result[i])
+					tosend = append(tosend, result[i])
 				}
 			}
-			c <- result
+			c <- tosend
 		}
 		close(c)
 	}()
