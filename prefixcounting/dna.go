@@ -136,6 +136,7 @@ func saveChunks(oname string, counts countList, sectors []*sector, sjoin *sync.W
 		fmt.Println("Saved", time.Now().Sub(ostart))
 		start = time.Now()
 	}
+	h5.Flush(hdf5.F_SCOPE_GLOBAL)
 	h5.Close()
 	sjoin.Done()
 }

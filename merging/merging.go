@@ -22,9 +22,8 @@ func check(e error) {
 	}
 }
 
-func kmerReader(table *hdf5.Table, reqs chan tableRead, size int) chan []dna.Kmer {
+func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) chan []dna.Kmer {
 	c := make(chan []dna.Kmer, 10)
-	records, _ := table.NumPackets()
 	go func() {
 		for j := 0; j < records; j += readLimit {
 			toFetch := readLimit
@@ -183,7 +182,8 @@ func main() {
 			name, err := group.ObjectNameByIndex(i)
 			check(err)
 			dset, _ := group.OpenTable(name)
-			kmersources = append(kmersources, kmerReader(dset, reads, size))
+			records, _ := dset.NumPackets()
+			kmersources = append(kmersources, kmerReader(dset, reads, size, records))
 		}
 	}
 	for len(kmersources) > 1 {
