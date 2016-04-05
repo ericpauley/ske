@@ -49,7 +49,10 @@ func kmerReader(table *hdf5.Table, reqs chan tableRead, size int, records int) c
 					tosend = append(tosend, result[i])
 				}
 			}
-			c <- tosend
+			if len(tosend) > 0 {
+				c <- tosend
+			}
+
 		}
 		close(c)
 	}()
